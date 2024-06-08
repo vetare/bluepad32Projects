@@ -5,8 +5,9 @@
 
 ControllerPtr myControllers[BP32_MAX_GAMEPADS];
 
-#define clawServoPin 5
-#define auxServoPin 18
+//Definitions of the pins on the ESP32 board and what they are connected to in real life.
+#define auxServoPin 5
+#define aux1ServoPin 18
 #define cabLights 32
 #define auxLights 33
 
@@ -36,45 +37,101 @@ ControllerPtr myControllers[BP32_MAX_GAMEPADS];
 #define thumbButtonY 2
 #define thumbButtonT 8
 #define thumbButtonS 4
+#define leftAxisPressed 100
+#define rightAxisPressed 200
+#define dpadUp 1
+#define dpadDown 2
 
 #define FORWARD 1
 #define BACKWARD -1
 #define STOP 0
 
 Adafruit_MCP23X17 mcp;
-Servo clawServo;
 Servo auxServo;
-int clawServoValue = 90;
+Servo aux1Servo;
 int auxServoValue = 90;
+int aux1ServoValue = 90;
 
-void onConnectedController(ControllerPtr ctl) {
-    bool foundEmptySlot = false;
-    for (int i = 0; i < BP32_MAX_GAMEPADS; i++) {
-        if (myControllers[i] == nullptr) {
-            Serial.printf("CALLBACK: Controller is connected, index=%d\n", i);
-            // Additionally, you can get certain gamepad properties like:
-            // Model, VID, PID, BTAddr, flags, etc.
-            ControllerProperties properties = ctl->getProperties();
-            Serial.printf("Controller model: %s, VID=0x%04x, PID=0x%04x\n", ctl->getModelName().c_str(), properties.vendor_id,
-                           properties.product_id);
-            myControllers[i] = ctl;
-            foundEmptySlot = true;
-            break;
-        }
-    }
-    if (!foundEmptySlot) {
-        Serial.println("CALLBACK: Controller connected, but could not found empty slot");
-    }
+bool cabLightsOn = false;
+bool auxLightsOn = false;
+
+//Main loop, this is called every "tick" so all processing code should be triggered from inside this method.
+void processGamepad(ControllerPtr ctl) {
+  processMovement(ctl->buttons());
+  processArmsAndBucketControls(ctl);
+  processLights(ctl->buttons());
+
+  //Exec V2 with new grabbing attachment
+  processGrabAttachment(ctl->buttons());
+  processFrontBucketAttachment(ctl->dpad());
 }
 
-int processTriggerServo(int trigger1, int trigger2, int movementBitmask) {
+void processMovement(int movementBitmask) {
+  //Right Motor
+  moveMotor(rightMotor0, rightMotor1, calculateButtonPress(movementBitmask, rightTrigger1, rightTrigger2));
+  //Left Motor
+  moveMotor(leftMotor0, leftMotor1, calculateButtonPress(movementBitmask, leftTrigger1, leftTrigger2));
+}
+
+void processArmsAndBucketControls(ControllerPtr ctl) {
+  //swingarm
+  moveMotor(pivot0, pivot1, calculateAxis(ctl->axisX()));
+  //dipper
+  moveMotor(secondBoom1, secondBoom0, calculateAxis(ctl->axisRX()));
+  //boom
+  moveMotor(mainBoom0, mainBoom1, calculateAxis(ctl->axisRY()));
+  //attachment
+  moveMotor(boomAttach1, boomAttach0, calculateAxis(ctl->axisY()));
+}
+
+void processLights(int bitMask) {
+  if (bitMask & leftAxisPressed) { 
+    controlLights(bitMask, cabLightsOn, cabLights);
+  }
+
+  if (bitMask & rightAxisPressed) { 
+    controlLights(bitMask, auxLightsOn, auxLights);
+  }
+}
+
+//Added with V2 of the Exec
+void processGrabAttachment(int movementBitmask) {
+  //Rotate Grabber Motor
+  moveMotor(thumb0, thumb1, calculateButtonPress(movementBitmask, thumbButtonX, thumbButtonY));
+  //Open or close the grabber
+  moveServo(calculateButtonPress(movementBitmask, thumbButtonS, thumbButtonT), auxServo, auxServoValue);
+}
+
+void processFrontBucketAttachment(int movementBitmask) {
+  moveMotor(auxAttach0, auxAttach1, calculateButtonPress(movementBitmask, dpadUp, dpadDown));
+}
+
+int calculateAxis(int axisValue) {
+  int minimal_control_input_stick = 300;
+
   int movement = STOP;
-  if (movementBitmask & trigger1) {
+  if (abs(axisValue) >= minimal_control_input_stick) {
+    if (axisValue > 0) {
+      movement++;
+    }
+    if (axisValue < 0) {
+      movement--;
+    }
+  }
+
+  return movement;
+}
+
+int calculateButtonPress(int movementBitMask, int forwards, int backwards){
+  Serial.println(movementBitMask);
+  int movement = STOP;
+  if (movementBitMask & forwards) {
     movement++;
   }
-  if (movementBitmask & trigger2) {
+  if (movementBitMask & backwards) {
     movement--;
   }
+  Serial.println(movement);
   return movement;
 }
 
@@ -99,99 +156,14 @@ void moveServo(int movement, Servo &servo, int &servoValue) {
   }
 }
 
-void onDisconnectedController(ControllerPtr ctl) {
-    bool foundController = false;
-
-    for (int i = 0; i < BP32_MAX_GAMEPADS; i++) {
-        if (myControllers[i] == ctl) {
-            Serial.printf("CALLBACK: Controller disconnected from index=%d\n", i);
-            myControllers[i] = nullptr;
-            foundController = true;
-            break;
-        }
+void controlLights(int bitMask, bool &lightStatus, int lightPin) {
+    if (!lightStatus) {
+      digitalWrite(lightPin, HIGH);
+      lightStatus = true;
+    } else {
+      digitalWrite(lightPin, LOW);
+      lightStatus = false;
     }
-
-    if (!foundController) {
-        Serial.println("CALLBACK: Controller disconnected, but not found in myControllers");
-    }
-}
-
-void processGamepad(ControllerPtr ctl) {
-  processMovement(ctl->buttons());
-  processThumbControl(ctl->buttons());
-  processAuxControl(ctl->dpad());
-
-  //swingarm
-  processAxis(ctl->axisX(), pivot0, pivot1);
-  //dipper
-  processAxis(ctl->axisRX(), secondBoom1, secondBoom0);
-  //boom
-  processAxis(ctl->axisRY(), mainBoom0, mainBoom1);
-  //attachment
-  processAxis(ctl->axisY(), boomAttach1, boomAttach0);
-
-  moveServo(processTriggerServo(thumbButtonT, thumbButtonS, ctl->buttons()), clawServo, clawServoValue);
-}
-
-void processAuxControl(int movementBitmask) {
-  int movement = STOP;
-
-  if (movementBitmask & thumbButtonX) {
-    movement++;
-  }
-  if (movementBitmask & thumbButtonY) {
-    movement--;
-  }
-  moveMotor(auxAttach0, auxAttach1, movement);
-}
-
-void processAxis(int axisValue, int motor0, int motor1) {
-  int minimal_control_input_stick = 300;
-
-  int movement = STOP;
-  if (abs(axisValue) >= minimal_control_input_stick) {
-    if (axisValue > 0) {
-      movement++;
-    }
-    if (axisValue < 0) {
-      movement--;
-    }
-  }
-  moveMotor(motor0, motor1, movement);
-}
-
-void processThumbControl(int movementBitmask) {
-  //Thumb Motor
-  int movement = STOP;
-  if (movementBitmask & thumbButtonX) {
-    movement++;
-  }
-  if (movementBitmask & thumbButtonY) {
-    movement--;
-  }
-  moveMotor(thumb0, thumb1, movement);
-}
-
-void processMovement(int movementBitmask) {
-  //Right Motor
-  int rightMovement = STOP;
-  if (movementBitmask & rightTrigger1) {
-    rightMovement++;
-  }
-  if (movementBitmask & rightTrigger2) {
-    rightMovement--;
-  }
-  moveMotor(rightMotor0, rightMotor1, rightMovement);
-
-  //Left Motor
-  int leftMovement = STOP;
-  if (movementBitmask & leftTrigger1) {
-    leftMovement++;
-  }
-  if (movementBitmask & leftTrigger2) {
-    leftMovement--;
-  }
-  moveMotor(leftMotor0, leftMotor1, leftMovement);
 }
 
 void moveMotor(int motorPin0, int motorPin1, int velocity) {
@@ -212,6 +184,36 @@ void moveMotor(int motorPin0, int motorPin1, int velocity) {
   }
 }
 
+// Used to bind the pins so we can access in the code.
+void pinSetup() {
+    //Binding the outputs of the MCP chip.
+    mcp.pinMode(leftMotor0, OUTPUT);
+    mcp.pinMode(leftMotor1, OUTPUT);
+    mcp.pinMode(rightMotor0, OUTPUT);
+    mcp.pinMode(rightMotor1, OUTPUT);
+    mcp.pinMode(pivot0, OUTPUT);
+    mcp.pinMode(pivot1, OUTPUT);
+    mcp.pinMode(secondBoom0, OUTPUT);
+    mcp.pinMode(secondBoom1, OUTPUT);
+    mcp.pinMode(mainBoom0, OUTPUT);
+    mcp.pinMode(mainBoom1, OUTPUT);
+    mcp.pinMode(boomAttach0, OUTPUT);
+    mcp.pinMode(boomAttach1, OUTPUT);
+    mcp.pinMode(thumb0, OUTPUT);
+    mcp.pinMode(thumb1, OUTPUT);
+    mcp.pinMode(auxAttach0, OUTPUT);
+    mcp.pinMode(auxAttach1, OUTPUT);
+
+    //Attach the servo pins.
+    auxServo.attach(auxServoPin);
+    auxServo.write(auxServoValue);
+
+    aux1Servo.attach(aux1ServoPin);
+    aux1Servo.write(aux1ServoValue);
+}
+
+// -------------------------------------------------------------- Boiler plate code, no need to modify this -------------------------------------------------------------------- //
+
 void processControllers() {
     for (auto myController : myControllers) {
         if (myController && myController->isConnected() && myController->hasData()) {
@@ -221,6 +223,43 @@ void processControllers() {
                 Serial.println("Unsupported controller");
             }
         }
+    }
+}
+
+void onConnectedController(ControllerPtr ctl) {
+    bool foundEmptySlot = false;
+    for (int i = 0; i < BP32_MAX_GAMEPADS; i++) {
+        if (myControllers[i] == nullptr) {
+            Serial.printf("CALLBACK: Controller is connected, index=%d\n", i);
+            // Additionally, you can get certain gamepad properties like:
+            // Model, VID, PID, BTAddr, flags, etc.
+            ControllerProperties properties = ctl->getProperties();
+            Serial.printf("Controller model: %s, VID=0x%04x, PID=0x%04x\n", ctl->getModelName().c_str(), properties.vendor_id,
+                           properties.product_id);
+            myControllers[i] = ctl;
+            foundEmptySlot = true;
+            break;
+        }
+    }
+    if (!foundEmptySlot) {
+        Serial.println("CALLBACK: Controller connected, but could not found empty slot");
+    }
+}
+
+void onDisconnectedController(ControllerPtr ctl) {
+    bool foundController = false;
+
+    for (int i = 0; i < BP32_MAX_GAMEPADS; i++) {
+        if (myControllers[i] == ctl) {
+            Serial.printf("CALLBACK: Controller disconnected from index=%d\n", i);
+            myControllers[i] = nullptr;
+            foundController = true;
+            break;
+        }
+    }
+
+    if (!foundController) {
+        Serial.println("CALLBACK: Controller disconnected, but not found in myControllers");
     }
 }
 
@@ -255,25 +294,8 @@ void setup() {
     // and retry initialization before giving up completely.
     // Then, you could gracefully exit the program or continue
     // running with limited functionality.
-    mcp.pinMode(leftMotor0, OUTPUT);
-    mcp.pinMode(leftMotor1, OUTPUT);
-    mcp.pinMode(rightMotor0, OUTPUT);
-    mcp.pinMode(rightMotor1, OUTPUT);
-    mcp.pinMode(pivot0, OUTPUT);
-    mcp.pinMode(pivot1, OUTPUT);
-    mcp.pinMode(secondBoom0, OUTPUT);
-    mcp.pinMode(secondBoom1, OUTPUT);
-    mcp.pinMode(mainBoom0, OUTPUT);
-    mcp.pinMode(mainBoom1, OUTPUT);
-    mcp.pinMode(boomAttach0, OUTPUT);
-    mcp.pinMode(boomAttach1, OUTPUT);
-    mcp.pinMode(thumb0, OUTPUT);
-    mcp.pinMode(thumb1, OUTPUT);
-    mcp.pinMode(auxAttach0, OUTPUT);
-    mcp.pinMode(auxAttach1, OUTPUT);
-
-    clawServo.attach(clawServoPin);
-    clawServo.write(clawServoValue);
+    
+    pinSetup();
   }
 
 

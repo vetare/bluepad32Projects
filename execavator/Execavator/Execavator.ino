@@ -47,9 +47,9 @@ ControllerPtr myControllers[BP32_MAX_GAMEPADS];
 #define STOP 0
 
 //Change this if you want to turn debugging mode on where the gamepad values will be output in the serial montior view.
-#define debugMode true
+#define debugMode false
 //Change this to true if you want to stop the model from moving useful while in debug mode
-#define blockControls true
+#define blockControls false
 
 Adafruit_MCP23X17 mcp;
 Servo auxServo;

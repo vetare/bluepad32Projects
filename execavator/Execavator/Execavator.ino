@@ -46,6 +46,11 @@ ControllerPtr myControllers[BP32_MAX_GAMEPADS];
 #define BACKWARD -1
 #define STOP 0
 
+//Change this if you want to turn debugging mode on where the gamepad values will be output in the serial montior view.
+#define debugMode true
+//Change this to true if you want to stop the model from moving useful while in debug mode
+#define blockControls true
+
 Adafruit_MCP23X17 mcp;
 Servo auxServo;
 Servo aux1Servo;
@@ -57,13 +62,19 @@ bool auxLightsOn = false;
 
 //Main loop, this is called every "tick" so all processing code should be triggered from inside this method.
 void processGamepad(ControllerPtr ctl) {
-  processMovement(ctl->buttons());
-  processArmsAndBucketControls(ctl);
-  processLights(ctl->buttons());
+  if (debugMode) {
+    dumpGamepad(ctl);
+  }
 
-  //Exec V2 with new grabbing attachment
-  processGrabAttachment(ctl->buttons());
-  processFrontBucketAttachment(ctl->dpad());
+  if (!blockControls) {
+    processMovement(ctl->buttons());
+    processArmsAndBucketControls(ctl);
+    processLights(ctl->buttons());
+
+    //Exec V2 with new grabbing attachment
+    processGrabAttachment(ctl->buttons());
+    processFrontBucketAttachment(ctl->dpad());
+  } 
 }
 
 void processMovement(int movementBitmask) {
@@ -291,12 +302,34 @@ void setup() {
     // For example, you might attempt to reset the MCP23X17
     // and retry initialization before giving up completely.
     // Then, you could gracefully exit the program or continue
-    // running with limited functionality.
+    // running with limited functionality.  
     
     pinSetup();
   }
 
-
+  //Used for just debugging input values produced by the gamepad buttons presses.
+  void dumpGamepad(ControllerPtr ctl) {
+    Serial.printf(
+      "idx=%d, dpad: 0x%02x, buttons: 0x%04x, axis L: %4d, %4d, axis R: %4d, %4d, brake: %4d, throttle: %4d, "
+      "misc: 0x%02x, gyro x:%6d y:%6d z:%6d, accel x:%6d y:%6d z:%6d\n",
+      ctl->index(),        // Controller Index
+      ctl->dpad(),         // D-pad
+      ctl->buttons(),      // bitmask of pressed buttons
+      ctl->axisX(),        // (-511 - 512) left X Axis
+      ctl->axisY(),        // (-511 - 512) left Y axis
+      ctl->axisRX(),       // (-511 - 512) right X axis
+      ctl->axisRY(),       // (-511 - 512) right Y axis
+      ctl->brake(),        // (0 - 1023): brake button
+      ctl->throttle(),     // (0 - 1023): throttle (AKA gas) button
+      ctl->miscButtons(),  // bitmask of pressed "misc" buttons
+      ctl->gyroX(),        // Gyro X
+      ctl->gyroY(),        // Gyro Y
+      ctl->gyroZ(),        // Gyro Z
+      ctl->accelX(),       // Accelerometer X
+      ctl->accelY(),       // Accelerometer Y
+      ctl->accelZ()        // Accelerometer Z
+    );
+  }
 
 // Arduino loop function. Runs in CPU 1.
 void loop() {

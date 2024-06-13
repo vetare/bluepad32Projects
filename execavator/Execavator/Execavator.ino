@@ -123,7 +123,6 @@ int calculateAxis(int axisValue) {
 }
 
 int calculateButtonPress(int movementBitMask, int forwards, int backwards){
-  Serial.println(movementBitMask);
   int movement = STOP;
   if (movementBitMask & forwards) {
     movement++;
@@ -131,7 +130,6 @@ int calculateButtonPress(int movementBitMask, int forwards, int backwards){
   if (movementBitMask & backwards) {
     movement--;
   }
-  Serial.println(movement);
   return movement;
 }
 
